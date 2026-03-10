@@ -1,5 +1,5 @@
 ## Prerequisites
-- **AVEVA Process Simulation** 
+- **AVEVA™ Process Simulation** 
 - **AVEVA Python Interface** (`simcentralconnect`)
 
 ## AVEVA Custom Libraries Setup 
