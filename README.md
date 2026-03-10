@@ -2,7 +2,7 @@
 - **AVEVA Process Simulation** 
 - **AVEVA Python Interface** (`simcentralconnect`)
 
-## AVEVA Custom Libraries Setup for Ibuprofen Example
+## AVEVA Custom Libraries Setup 
 For the AVEVA Process Simulation examples to run correctly, you need to place the provided simulation library files into your My Thermo Data directory ("C:\Users\xxx\My Thermo Data") on your computer:
 Pharma.BASE.cmp
 Pharma.bnk
