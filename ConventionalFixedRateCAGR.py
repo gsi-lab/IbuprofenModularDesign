@@ -264,7 +264,7 @@ if __name__ == "__main__":
     if not os.path.exists(results_dir):
         os.makedirs(results_dir)
 
-    num_samples = 10  # Define the number of Monte Carlo samples
+    num_samples = 100  # Define the number of Monte Carlo samples
     simulator = (
         MonteCarloSimulator()
     )  # Create an instance of the MonteCarloSimulator class
@@ -480,3 +480,4 @@ if __name__ == "__main__":
     plot_file = os.path.join(results_dir, "Conventional_MC_CAGR_results_Fixed.png")
     plt.savefig(plot_file, dpi=300, bbox_inches="tight")
     plt.show()
+
