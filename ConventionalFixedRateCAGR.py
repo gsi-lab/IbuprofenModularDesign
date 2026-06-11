@@ -1,3 +1,4 @@
+import argparse
 import os
 
 import matplotlib.pyplot as plt
@@ -161,10 +162,8 @@ class MonteCarloSimulator:
         sim_manager = sc.GetService("ISimulationManager")
 
         # Setup simulation
-        sim_name1 = (
-            "IbuprofenProcessSimulationConventional"  # Different simulation name
-        )
-        TCI = 10234600  # Capital Investment in ¤
+        sim_name1 = "IbuprofenProcessSimulationConventional"
+        TCI = 10755108  # Capital Investment in ¤
 
         # Initialize totals for 20-year calculation
         total_discounted_opex = 0
@@ -264,15 +263,362 @@ if __name__ == "__main__":
     if not os.path.exists(results_dir):
         os.makedirs(results_dir)
 
-    num_samples = 100  # Define the number of Monte Carlo samples
-    simulator = (
-        MonteCarloSimulator()
-    )  # Create an instance of the MonteCarloSimulator class
+    parser = argparse.ArgumentParser(
+        description="Run Monte Carlo simulations and optional convergence analysis."
+    )
+    parser.add_argument(
+        "--samples",
+        default="100",
+        help="Comma-separated list of sample sizes to run (e.g. 20,50,100).",
+    )
+    parser.add_argument(
+        "--convergence",
+        action="store_true",
+        help="Run permutation-based convergence analysis on the obtained LCOP values.",
+    )
+    parser.add_argument(
+        "--conv-step",
+        type=int,
+        default=5,
+        help="Step size for convergence sample sizes (default: 5).",
+    )
+    parser.add_argument(
+        "--conv-repeats",
+        type=int,
+        default=200,
+        help="Number of permutation repeats for convergence (default: 200).",
+    )
+    parser.add_argument(
+        "--conv-out",
+        default=None,
+        help="Output prefix for convergence files (default: uses results_dir + suffix).",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="Random seed for reproducible permutations (default: 0).",
+    )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=9000.0,
+        help="LCOP threshold for ruin-probability (default: 9000).",
+    )
 
-    # Run simulations and get results
-    results = simulator.run_monte_carlo_simulation(
-        num_samples, results_dir
-    )  # Call the method on the instance
+    args = parser.parse_args()
+
+    # Allow automated sequence of sample sizes when requested
+    parser.add_argument(
+        "--auto",
+        action="store_true",
+        help="Run automated sample sizes [20,40,60,80,100,120].",
+    )
+
+    parser.add_argument(
+        "--conv-maxsum",
+        action="store_true",
+        help="Also produce cumulative max-to-sum and max-to-mean convergence plots.",
+    )
+
+    # re-parse to include the new option when script is executed directly
+    args = parser.parse_args()
+
+    if args.auto:
+        sample_list = [20, 40, 60, 80, 100, 120]
+    else:
+        sample_list = [int(s) for s in args.samples.split(",") if s.strip()]
+
+    simulator = MonteCarloSimulator()
+
+    def convergence_analysis(values, threshold=9000.0, step=5, repeats=200):
+        values = np.asarray(values)
+        n = values.size
+        if n == 0:
+            return np.array([]), np.array([]), np.array([]), np.array([]), np.array([])
+        step = max(1, int(step))
+        sizes = np.arange(step, n + 1, step)
+        if sizes.size == 0:
+            sizes = np.array([n])
+        all_mean = np.zeros((repeats, sizes.size), dtype=float)
+        all_ruin = np.zeros((repeats, sizes.size), dtype=float)
+        for r in range(repeats):
+            perm = np.random.permutation(n)
+            perm_vals = values[perm]
+            for i, s in enumerate(sizes):
+                sample = perm_vals[:s]
+                all_mean[r, i] = np.nanmean(sample)
+                all_ruin[r, i] = np.sum(sample > threshold) / float(s)
+        mean_means = np.nanmean(all_mean, axis=0)
+        mean_stds = np.nanstd(all_mean, axis=0, ddof=1)
+        ruin_means = np.nanmean(all_ruin, axis=0)
+        ruin_stds = np.nanstd(all_ruin, axis=0, ddof=1)
+        return sizes, mean_means, mean_stds, ruin_means, ruin_stds
+
+    def run_convergence_and_save(values, out_prefix, threshold, step, repeats, seed):
+        np.random.seed(seed)
+        sizes, mean_means, mean_stds, ruin_means, ruin_stds = convergence_analysis(
+            values, threshold=threshold, step=step, repeats=repeats
+        )
+        if sizes.size == 0:
+            print("No valid LCOP values for convergence analysis.")
+            return
+        # Plot mean convergence
+        plt.figure(figsize=(10, 8))
+        plt.subplot(2, 1, 1)
+        plt.plot(sizes, mean_means, "-o")
+        plt.fill_between(
+            sizes, mean_means - mean_stds, mean_means + mean_stds, alpha=0.2
+        )
+        plt.xlabel("Sample size n")
+        plt.ylabel("Mean LCOP (¤/t)")
+        plt.title("Convergence of Mean LCOP")
+        plt.grid(True)
+
+        plt.subplot(2, 1, 2)
+        plt.plot(sizes, ruin_means, "-o")
+        plt.fill_between(
+            sizes, ruin_means - ruin_stds, ruin_means + ruin_stds, alpha=0.2
+        )
+        plt.xlabel("Sample size n")
+        plt.ylabel(f"Ruin P(LCOP>{threshold})")
+        plt.title("Convergence of Ruin Probability")
+        plt.grid(True)
+
+        plt.tight_layout()
+        out_plot = f"{out_prefix}.png"
+        plt.savefig(out_plot, dpi=300, bbox_inches="tight")
+        print(f"Saved convergence plot to: {out_plot}")
+
+        # Save CSV
+        rows = []
+        for i, s in enumerate(sizes):
+            rows.append(
+                {
+                    "size": int(s),
+                    "mean": mean_means[i],
+                    "mean_std": mean_stds[i],
+                    "ruin": ruin_means[i],
+                    "ruin_std": ruin_stds[i],
+                }
+            )
+        out_csv = f"{out_prefix}.csv"
+        pd.DataFrame(rows).to_csv(out_csv, index=False)
+        print(f"Saved convergence CSV to: {out_csv}")
+
+    def cumulative_maxsum_analysis(values, step=1):
+        """Deterministic cumulative analysis: for increasing sample sizes compute
+        cumulative mean, std, max/sum and max/mean to check whether a single
+        sample dominates the total."""
+        values = np.asarray(values)
+        n = values.size
+        if n == 0:
+            return np.array([]), np.array([]), np.array([]), np.array([]), np.array([])
+        step = max(1, int(step))
+        sizes = np.arange(step, n + 1, step)
+        if sizes.size == 0:
+            sizes = np.array([n])
+        cum_means = np.zeros(sizes.size, dtype=float)
+        cum_stds = np.zeros(sizes.size, dtype=float)
+        max_over_sum = np.zeros(sizes.size, dtype=float)
+        max_over_mean = np.zeros(sizes.size, dtype=float)
+        for i, s in enumerate(sizes):
+            sample = values[:s]
+            cum_means[i] = np.nanmean(sample)
+            cum_stds[i] = np.nanstd(sample, ddof=1) if s > 1 else 0.0
+            total = np.nansum(sample)
+            m = np.nanmax(sample)
+            max_over_sum[i] = m / total if total != 0 else np.nan
+            max_over_mean[i] = m / cum_means[i] if cum_means[i] != 0 else np.nan
+        return sizes, cum_means, cum_stds, max_over_sum, max_over_mean
+
+    def run_cumulative_maxsum_and_save(values, out_prefix, step=1):
+        sizes, cum_means, cum_stds, max_over_sum, max_over_mean = (
+            cumulative_maxsum_analysis(values, step=step)
+        )
+        if sizes.size == 0:
+            print("No valid LCOP values for cumulative max/sum analysis.")
+            return
+
+        plt.figure(figsize=(10, 10))
+        plt.subplot(3, 1, 1)
+        plt.plot(sizes, cum_means, "-o")
+        plt.fill_between(sizes, cum_means - cum_stds, cum_means + cum_stds, alpha=0.2)
+        plt.xlabel("Sample size n")
+        plt.ylabel("Cumulative mean LCOP (¤/t)")
+        plt.title("Cumulative Mean LCOP")
+        plt.grid(True)
+
+        plt.subplot(3, 1, 2)
+        plt.plot(sizes, max_over_sum, "-o", color="purple")
+        plt.xlabel("Sample size n")
+        plt.ylabel("Max / Sum")
+        plt.title("Max-to-Sum Ratio (cumulative)")
+        plt.grid(True)
+
+        plt.subplot(3, 1, 3)
+        plt.plot(sizes, max_over_mean, "-o", color="brown")
+        plt.xlabel("Sample size n")
+        plt.ylabel("Max / Mean")
+        plt.title("Max-to-Mean Ratio (cumulative)")
+        plt.grid(True)
+
+        plt.tight_layout()
+        out_plot = f"{out_prefix}_maxsum.png"
+        plt.savefig(out_plot, dpi=300, bbox_inches="tight")
+        print(f"Saved cumulative max/sum plot to: {out_plot}")
+
+        rows = []
+        for i, s in enumerate(sizes):
+            rows.append(
+                {
+                    "size": int(s),
+                    "cum_mean": cum_means[i],
+                    "cum_std": cum_stds[i],
+                    "max_over_sum": max_over_sum[i],
+                    "max_over_mean": max_over_mean[i],
+                }
+            )
+        out_csv = f"{out_prefix}_maxsum.csv"
+        pd.DataFrame(rows).to_csv(out_csv, index=False)
+        print(f"Saved cumulative max/sum CSV to: {out_csv}")
+
+    def cumulative_ms_moments(values, step=1):
+        """Compute max-to-sum (M/S) ratios for mean, variance, skewness, kurtosis
+        for cumulative sample sizes."""
+        values = np.asarray(values)
+        n = values.size
+        if n == 0:
+            return np.array([]), np.array([]), np.array([]), np.array([]), np.array([])
+        step = max(1, int(step))
+        sizes = np.arange(step, n + 1, step)
+        if sizes.size == 0:
+            sizes = np.array([n])
+
+        ms_mean = np.zeros(sizes.size, dtype=float)
+        ms_var = np.zeros(sizes.size, dtype=float)
+        ms_skew = np.zeros(sizes.size, dtype=float)
+        ms_kurt = np.zeros(sizes.size, dtype=float)
+
+        for i, s in enumerate(sizes):
+            sample = values[:s]
+            # Mean contributions (use absolute contributions to avoid cancellation)
+            abs_vals = np.abs(sample)
+            denom_mean = np.nansum(abs_vals)
+            ms_mean[i] = np.nanmax(abs_vals) / denom_mean if denom_mean != 0 else np.nan
+
+            # Central moments using sample mean at size s
+            mean_s = np.nanmean(sample)
+            dev = sample - mean_s
+            contrib_var = dev**2
+            denom_var = np.nansum(contrib_var)
+            ms_var[i] = np.nanmax(contrib_var) / denom_var if denom_var != 0 else np.nan
+
+            contrib_skew = np.abs(dev**3)
+            denom_skew = np.nansum(contrib_skew)
+            ms_skew[i] = (
+                np.nanmax(contrib_skew) / denom_skew if denom_skew != 0 else np.nan
+            )
+
+            contrib_kurt = np.abs(dev**4)
+            denom_kurt = np.nansum(contrib_kurt)
+            ms_kurt[i] = (
+                np.nanmax(contrib_kurt) / denom_kurt if denom_kurt != 0 else np.nan
+            )
+
+        return sizes, ms_mean, ms_var, ms_skew, ms_kurt
+
+    def run_ms_moments_and_save(values, out_prefix, step=1):
+        sizes, ms_mean, ms_var, ms_skew, ms_kurt = cumulative_ms_moments(
+            values, step=step
+        )
+        if sizes.size == 0:
+            print("No valid LCOP values for M/S moment analysis.")
+            return
+
+        plt.figure(figsize=(10, 8))
+        plt.subplot(2, 2, 1)
+        plt.plot(sizes, ms_mean, "-o")
+        plt.xlabel("Sample size n")
+        plt.ylabel("M/S (mean)")
+        plt.title("Max-to-Sum: Mean")
+        plt.grid(True)
+
+        plt.subplot(2, 2, 2)
+        plt.plot(sizes, ms_var, "-o", color="orange")
+        plt.xlabel("Sample size n")
+        plt.ylabel("M/S (variance)")
+        plt.title("Max-to-Sum: Variance")
+        plt.grid(True)
+
+        plt.subplot(2, 2, 3)
+        plt.plot(sizes, ms_skew, "-o", color="purple")
+        plt.xlabel("Sample size n")
+        plt.ylabel("M/S (skewness)")
+        plt.title("Max-to-Sum: Skewness")
+        plt.grid(True)
+
+        plt.subplot(2, 2, 4)
+        plt.plot(sizes, ms_kurt, "-o", color="brown")
+        plt.xlabel("Sample size n")
+        plt.ylabel("M/S (kurtosis)")
+        plt.title("Max-to-Sum: Kurtosis")
+        plt.grid(True)
+
+        plt.tight_layout()
+        out_plot = f"{out_prefix}_ms_moments.png"
+        plt.savefig(out_plot, dpi=300, bbox_inches="tight")
+        print(f"Saved M/S moments plot to: {out_plot}")
+
+        rows = []
+        for i, s in enumerate(sizes):
+            rows.append(
+                {
+                    "size": int(s),
+                    "ms_mean": ms_mean[i],
+                    "ms_var": ms_var[i],
+                    "ms_skew": ms_skew[i],
+                    "ms_kurt": ms_kurt[i],
+                }
+            )
+        out_csv = f"{out_prefix}_ms_moments.csv"
+        pd.DataFrame(rows).to_csv(out_csv, index=False)
+        print(f"Saved M/S moments CSV to: {out_csv}")
+
+    # Run simulations for each requested sample size
+    for num_samples in sample_list:
+        print(f"\nRunning Monte Carlo with num_samples={num_samples}")
+        results = simulator.run_monte_carlo_simulation(num_samples, results_dir)
+
+        results_df = pd.DataFrame(
+            {
+                "Sample_Number": range(1, num_samples + 1),
+                "CAGR": simulator.cagr_samples,
+                "Demand_2045": simulator.final_demands,
+                "LCOP": [r[0] for r in results],
+                "Simulation_Status": [r[1] for r in results],
+            }
+        )
+
+        successful_lcop = results_df.loc[results_df["Simulation_Status"], "LCOP"]
+        valid_lcop = successful_lcop[np.isfinite(successful_lcop)]
+
+        # Save results CSV per sample size
+        out_results = os.path.join(
+            results_dir, f"Conventional_MC_results_Fixed_N{num_samples}.csv"
+        )
+        results_df.to_csv(out_results, index=False)
+        print(f"Saved simulation results to: {out_results}")
+
+        if args.convergence:
+            # Use deterministic cumulative convergence (no permutation-based analysis)
+            out_pref = args.conv_out or os.path.join(
+                results_dir, f"Conventional_Convergence_N{num_samples}"
+            )
+            # Save cumulative M/S analysis for moments (mean, var, skew, kurt)
+            run_ms_moments_and_save(
+                valid_lcop.to_numpy(), out_pref, step=args.conv_step
+            )
 
     # Create a DataFrame to store results
     results_df = pd.DataFrame(
@@ -480,4 +826,3 @@ if __name__ == "__main__":
     plot_file = os.path.join(results_dir, "Conventional_MC_CAGR_results_Fixed.png")
     plt.savefig(plot_file, dpi=300, bbox_inches="tight")
     plt.show()
-
