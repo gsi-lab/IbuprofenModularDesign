@@ -169,10 +169,8 @@ class MonteCarloSimulator:
         sim_manager = sc.GetService("ISimulationManager")
 
         # Setup simulation
-        sim_name1 = (
-            "IbuprofenProcessSimulationConventional"  # Different simulation name
-        )
-        TCI = 10234600  # Capital Investment in ¤
+        sim_name1 = "IbuprofenProcessSimulationConventional"
+        TCI = 10755108  # Capital Investment in ¤
 
         # Initialize totals for 20-year calculation
         total_discounted_opex = 0
