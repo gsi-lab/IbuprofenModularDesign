@@ -156,12 +156,11 @@ class MonteCarloSimulator:
         sc = simcentralconnect.connect().Result
         var_manager = sc.GetService("IVariableManager")
         sim_manager = sc.GetService("ISimulationManager")
-        snapshot_manager = sc.GetService("ISnapshotManager")
 
         # Setup simulation
-        sim_name1 = "IbuprofenProcessSimulationModular"
-        snapshot_name = "Pro 1"  # Add snapshot name
-        TCI = 12161600  # Capital Investment in ¤
+        sim_name1 = "IbuprofenProcessSimulationModular_Onecarbo"
+        sim_name2 = "IbuprofenProcessSimulationModular_Twocarbo"
+        TCI = 13304523  # Capital Investment in ¤
 
         # Initialize totals for 20-year calculation
         total_discounted_opex = 0
@@ -178,51 +177,54 @@ class MonteCarloSimulator:
             t = year_idx + 1  # Time index for discounting (1 to 20)
 
             try:
-                # Determine simulation settings based on demand level
-                if pu >= 380 and pu < 420:
-                    sim_manager.OpenSimulation(sim_name1).Result
+                # Choose active simulation based on demand and set corresponding ratios
+                if pu > 335 and pu < 395:
+                    active_sim = sim_name1
+                    sim_manager.OpenSimulation(active_sim).Result
                     var_manager.SetVariableValue(
-                        sim_name1, "SP3.OutRatio[S45]", 0.001, "fraction", 90000
+                        active_sim, "SP3.OutRatio[S45]", 0.001, "fraction", 90000
                     ).Result
                     var_manager.SetVariableValue(
-                        sim_name1, "SP4.OutRatio[S54]", 0.001, "fraction", 90000
+                        active_sim, "SP4.OutRatio[S54]", 0.001, "fraction", 90000
                     ).Result
-                elif pu >= 420:
-                    sim_manager.OpenSimulation(sim_name1).Result
+                elif pu >= 395:
+                    active_sim = sim_name2
+                    sim_manager.OpenSimulation(active_sim).Result
                     var_manager.SetVariableValue(
-                        sim_name1, "SP3.OutRatio[S45]", 0.001, "fraction", 90000
-                    ).Result
-                    var_manager.SetVariableValue(
-                        sim_name1, "SP4.OutRatio[S54]", 0.999, "fraction", 90000
-                    ).Result
-                elif pu < 380:
-                    sim_manager.OpenSimulation(sim_name1).Result
-                    var_manager.SetVariableValue(
-                        sim_name1, "SP3.OutRatio[S45]", 1, "fraction", 90000
+                        active_sim, "SP3.OutRatio[S45]", 0.001, "fraction", 90000
                     ).Result
                     var_manager.SetVariableValue(
-                        sim_name1, "SP4.OutRatio[S54]", 0.001, "fraction", 90000
+                        active_sim, "SP4.OutRatio[S54]", 0.999, "fraction", 90000
+                    ).Result
+                else:  # pu <= 335
+                    active_sim = sim_name1
+                    sim_manager.OpenSimulation(active_sim).Result
+                    var_manager.SetVariableValue(
+                        active_sim, "SP3.OutRatio[S45]", 0.999, "fraction", 90000
+                    ).Result
+                    var_manager.SetVariableValue(
+                        active_sim, "SP4.OutRatio[S54]", 0.001, "fraction", 90000
                     ).Result
 
-                # Set demand for this year
+                # Set demand for the selected active simulation only
                 var_manager.SetVariableValue(
-                    sim_name1, "Var104", pu, "kg/h", 90000
+                    active_sim, "Var104", pu, "kg/h", 90000
                 ).Result
 
-                # Get annual results
+                # Get annual results from the active simulation only
                 AnnualOPEX = var_manager.GetVariableValue(
-                    sim_name1, "EconSummary1.TotalOperatingCost", "¤/yr", 90000
+                    active_sim, "EconSummary1.TotalOperatingCost", "¤/yr", 90000
                 ).Result
                 AnnualLabor = var_manager.GetVariableValue(
-                    sim_name1, "EconSummary1.AnnualLaborCost", "¤", 90000
+                    active_sim, "EconSummary1.AnnualLaborCost", "¤", 90000
                 ).Result
                 AnnualMaintenance = var_manager.GetVariableValue(
-                    sim_name1, "MaintenanceCost", "¤", 90000
+                    active_sim, "MaintenanceCost", "¤", 90000
                 ).Result
                 AnnualProduct = var_manager.GetVariableValue(
-                    sim_name1, "IBU_crystals.W", "kg/h", 90000
+                    active_sim, "IBU_crystals.W", "kg/h", 90000
                 ).Result
-                ss = sim_manager.GetSimulationStatus(sim_name1).Result
+                ss = sim_manager.GetSimulationStatus(active_sim).Result
 
                 # Check if simulation was successful for this year
                 if not ss[2]:
